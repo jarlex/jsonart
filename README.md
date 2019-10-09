@@ -1,2 +1,1 @@
-# jsonart
-Arbitrary JSON parser
+nbdnt_jsonart
