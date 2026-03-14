@@ -1,479 +1,443 @@
 package jsonart
 
 import (
-    "bytes"
-    "errors"
-    "fmt"
-    "strconv"
+	"bytes"
+	"fmt"
+	"strconv"
 )
 
-func unexpected(expect string, offset, size int, data []byte) error {
-    if offset < size {
-        return errors.New(fmt.Sprintf("Unexptected token '%c' at: %d, expect: %s", data[offset], offset, expect))
-    } else {
-        return errors.New("Unexpected EOF, expect: " + expect)
-    }
-}
-
 var (
-    valueStart = "{, [, [0-9], -, t, f, n, \""
-    bytesTrue  = []byte{'r', 'u', 'e'}
-    bytesFalse = []byte{'a', 'l', 's', 'e'}
-    bytesNull  = []byte{'u', 'l', 'l'}
+	valueStart = "{, [, [0-9], -, t, f, n, \""
+	bytesTrue  = []byte{'r', 'u', 'e'}
+	bytesFalse = []byte{'a', 'l', 's', 'e'}
+	bytesNull  = []byte{'u', 'l', 'l'}
 )
 
 const (
-    stateNone = iota
-    stateString
-    stateArrayValueOrEnd
-    stateArrayEndOrComma
-    stateObjectKeyOrEnd
-    stateObjectColon
-    stateObjectEndOrComma
-    stateObjectKey
+	stateNone = iota
+	stateString
+	stateArrayValueOrEnd
+	stateArrayEndOrComma
+	stateObjectKeyOrEnd
+	stateObjectColon
+	stateObjectEndOrComma
+	stateObjectKey
 )
 
 type state struct {
-    value  *Value
-    state  int
-    parent *state
+	value  *Value
+	state  int
+	parent *state
 }
 
-func addBuf(buf []byte, tempInt2, bufSize, ask int) ([]byte, int) {
-    if bufSize < tempInt2+ask {
-        bufSize += 1024
-        nbuf := make([]byte, bufSize)
-        copy(nbuf, buf)
-        return nbuf, bufSize
-    }
-    return buf, bufSize
+type parser struct {
+	data   []byte
+	size   int
+	offset int
+	buf    []byte
+	curr   *state
+}
+
+func (p *parser) unexpected(expect string) error {
+	if p.offset < p.size {
+		return fmt.Errorf("Unexpected token '%c' at: %d, expect: %s", p.data[p.offset], p.offset, expect)
+	}
+	return fmt.Errorf("Unexpected EOF, expect: %s", expect)
+}
+
+func (p *parser) unexpectedAt(expect string, offset int) error {
+	if offset < p.size {
+		return fmt.Errorf("Unexpected token '%c' at: %d, expect: %s", p.data[offset], offset, expect)
+	}
+	return fmt.Errorf("Unexpected EOF, expect: %s", expect)
 }
 
 func Unmarshal(data []byte) (value *Value, err error) {
-    value = &Value{nil}
-    root := &state{value, stateNone, nil}
-    curr := root
-    size := len(data)
-    offset := 0
-    bufSize := 1024
-    buf := make([]byte, bufSize)
-    tempUnicode := make([]int, 4)
-    var tempInt int
-    var tempInt2 int
-    var tempInt3 int
-    var tempInt4 int
-    var tempByte byte
-    var tempDecimal []byte
-    var tempExp []byte
-    for {
-    LOOP_WHITESPACE:
-        for ; offset < size; offset++ {
-            switch data[offset] {
-            case '\t', '\r', '\n', ' ':
-                continue
-            default:
-                break LOOP_WHITESPACE
-            }
-        }
-        if curr == nil {
-            if offset != size {
-                err = unexpected("EOF", offset, size, data)
-            }
-            return
-        }
-        switch curr.state {
-        case stateArrayValueOrEnd:
-            if offset == size {
-                err = unexpected("value or ]", offset, size, data)
-                return
-            }
-            switch data[offset] {
-            case ']':
-                curr = curr.parent
-                offset++
-            default:
-                curr.state = stateArrayEndOrComma
-                curr = &state{curr.value.AddElement(), stateNone, curr}
-            }
-            continue
-        case stateArrayEndOrComma:
-            if offset == size {
-                err = unexpected(", or ]", offset, size, data)
-                return
-            }
-            switch data[offset] {
-            case ']':
-                offset++
-                curr = curr.parent
-            case ',':
-                offset++
-                curr.state = stateArrayEndOrComma
-                curr = &state{curr.value.AddElement(), stateNone, curr}
-            default:
-                err = unexpected(", or ]", offset, size, data)
-                return
-            }
-            continue
-        case stateObjectColon:
-            if offset == size {
-                err = unexpected(":", offset, size, data)
-                return
-            }
-            offset++
-            curr.state = stateNone
-            continue
-        case stateObjectEndOrComma:
-            if offset == size {
-                err = unexpected(", or }", offset, size, data)
-                return
-            }
-            switch data[offset] {
-            case ',':
-                curr.state = stateObjectKey
-            case '}':
-                curr = curr.parent
-            default:
-                err = unexpected(", or }", offset, size, data)
-                return
-            }
-            offset++
-            continue
-        case stateObjectKeyOrEnd:
-            if offset == size {
-                err = unexpected("\" or }", offset, size, data)
-                return
-            }
-            if data[offset] == '}' {
-                offset++
-                curr = curr.parent
-                continue
-            }
-            fallthrough
-        case stateObjectKey:
-            if offset == size {
-                err = unexpected("\"", offset, size, data)
-                return
-            }
-            if data[offset] != '"' {
-                err = unexpected("\"", offset, size, data)
-                return
-            }
-            fallthrough
-        case stateString:
-            offset++
-            tempInt2 = 0
-        LOOP_STRING:
-            for tempInt = offset; tempInt < size; tempInt++ {
-                switch data[tempInt] {
-                case '\\':
-                    tempInt++
-                    if tempInt == size {
-                        err = unexpected("escaped char", tempInt, size, data)
-                        return
-                    }
-                    switch data[tempInt] {
-                    case 'U', 'u':
-                        tempInt++
-                        if size < tempInt+4 {
-                            err = unexpected("[0-F]", size, size, data)
-                            return
-                        }
-                        for tempInt3 = 0; tempInt3 < 4; tempInt3++ {
-                            switch data[tempInt] {
-                            case '0', '1', '2', '3', '4', '5', '6', '7', '8', '9':
-                                tempUnicode[tempInt3] = int(data[tempInt]) - 0x30
-                            case 'a', 'b', 'c', 'd', 'e', 'f':
-                                tempUnicode[tempInt3] = int(data[tempInt]) - 0x57
-                            case 'A', 'B', 'C', 'D', 'E', 'F':
-                                tempUnicode[tempInt3] = int(data[tempInt]) - 0x37
-                            default:
-                                err = unexpected("[0-F]", tempInt, size, data)
-                                return
-                            }
-                            tempInt++
-                        }
-                        tempInt4 = (tempUnicode[0] << 12) | (tempUnicode[1] << 8) | (tempUnicode[2] << 4) | (tempUnicode[3])
-                        if tempInt4 > 0xD7FF && tempInt4 < 0xDC00 {
-                            if size < tempInt+6 {
-                                if size == tempInt || data[tempInt] != '\\' {
-                                    err = unexpected("\\", size, size, data)
-                                    return
-                                }
-                                if size < tempInt+2 || (data[tempInt+1] != 'U' && data[tempInt+1] != 'u') {
-                                    err = unexpected("Uu", tempInt+1, size, data)
-                                    return
-                                }
-                                err = unexpected("[0-F]", size, size, data)
-                                return
-                            }
-                            if data[tempInt] != '\\' {
-                                err = unexpected("\\", tempInt, size, data)
-                                return
-                            }
-                            tempInt++
-                            if data[tempInt] != 'U' && data[tempInt] != 'u' {
-                                err = unexpected("Uu", tempInt, size, data)
-                                return
-                            }
-                            tempInt++
-                            for tempInt3 = 0; tempInt3 < 4; tempInt3++ {
-                                switch data[tempInt] {
-                                case '0', '1', '2', '3', '4', '5', '6', '7', '8', '9':
-                                    tempUnicode[tempInt3] = int(data[tempInt]) - 0x30
-                                case 'a', 'b', 'c', 'd', 'e', 'f':
-                                    tempUnicode[tempInt3] = int(data[tempInt]) - 0x57
-                                case 'A', 'B', 'C', 'D', 'E', 'F':
-                                    tempUnicode[tempInt3] = int(data[tempInt]) - 0x37
-                                default:
-                                    err = unexpected("[0-F]", tempInt, size, data)
-                                    return
-                                }
-                                tempInt++
-                            }
-                            tempInt3 = (tempUnicode[0] << 12) | (tempUnicode[1] << 8) | (tempUnicode[2] << 4) | (tempUnicode[3])
-                            if tempInt3 < 0xDC00 || tempInt3 > 0xDFFF {
-                                err = unexpected("[0xdc00 - 0xdfff]", tempInt-4, size, data)
-                                return
-                            }
-                            tempInt4 = (((tempInt4 - 0xD800) << 10) | (tempInt3 - 0xDC00)) + 0x10000
-                        }
-                        tempInt--
-                        if tempInt4 < 0x0080 {
-                            buf, bufSize = addBuf(buf, tempInt2, bufSize, 1)
-                            buf[tempInt2] = byte(tempInt4)
-                            tempInt2++
-                        } else if (tempInt4 < 0x0800) {
-                            buf, bufSize = addBuf(buf, tempInt2, bufSize, 2)
-                            buf[tempInt2] = 0xC0 | byte(tempInt4>>6)
-                            buf[tempInt2+1] = 0x80 | byte(tempInt4&0xBF)
-                            tempInt2 += 2
-                        } else if (tempInt4 < 0x10000) {
-                            buf, bufSize = addBuf(buf, tempInt2, bufSize, 3)
-                            buf[tempInt2] = 0xE0 | byte(tempInt4>>12)
-                            buf[tempInt2+1] = 0x80 | byte((tempInt4>>6)&0xBF)
-                            buf[tempInt2+2] = 0x80 | byte(tempInt4&0xBF)
-                            tempInt2 += 3
-                        } else {
-                            buf, bufSize = addBuf(buf, tempInt2, bufSize, 4)
-                            buf[tempInt2] = 0xF0 | byte(tempInt4>>18)
-                            buf[tempInt2+1] = 0x80 | byte((tempInt4>>12)&0xBF)
-                            buf[tempInt2+2] = 0x80 | byte((tempInt4>>6)&0xBF)
-                            buf[tempInt2+3] = 0x80 | byte(tempInt4&0xBF)
-                            tempInt2 += 4
-                        }
-                    case 't':
-                        buf, bufSize = addBuf(buf, tempInt2, bufSize, 1)
-                        buf[tempInt2] = '\t'
-                        tempInt2++
-                    case 'r':
-                        buf, bufSize = addBuf(buf, tempInt2, bufSize, 1)
-                        buf[tempInt2] = '\r'
-                        tempInt2++
-                    case 'n':
-                        buf, bufSize = addBuf(buf, tempInt2, bufSize, 1)
-                        buf[tempInt2] = '\n'
-                        tempInt2++
-                    case '"':
-                        buf, bufSize = addBuf(buf, tempInt2, bufSize, 1)
-                        buf[tempInt2] = '"'
-                        tempInt2++
-                    case '\\':
-                        buf, bufSize = addBuf(buf, tempInt2, bufSize, 1)
-                        buf[tempInt2] = '\\'
-                        tempInt2++
-                    case '/':
-                        buf, bufSize = addBuf(buf, tempInt2, bufSize, 1)
-                        buf[tempInt2] = '/'
-                        tempInt2++
-                    case 'b':
-                        buf, bufSize = addBuf(buf, tempInt2, bufSize, 1)
-                        buf[tempInt2] = 0x08
-                        tempInt2++
-                    case 'f':
-                        buf, bufSize = addBuf(buf, tempInt2, bufSize, 1)
-                        buf[tempInt2] = 0x0C
-                        tempInt2++
-                    default:
-                        err = unexpected("escape sequence", tempInt, size, data)
-                        return
-                    }
-                case '"':
-                    break LOOP_STRING
-                case 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15,
-                    16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31:
-                    err = unexpected("unicode", tempInt, size, data)
-                    return
-                default:
-                    buf, bufSize = addBuf(buf, tempInt2, bufSize, 1)
-                    buf[tempInt2] = data[tempInt]
-                    tempInt2++
-                }
-            }
-            if tempInt == size {
-                err = unexpected("\" to end string", tempInt, size, data)
-                return
-            }
-            if curr.state == stateString {
-                curr.value.value = string(buf[0:tempInt2])
-                curr = curr.parent
-            } else {
-                curr.state = stateObjectEndOrComma
-                curr = &state{curr.value.AddField(string(buf[0:tempInt2])), stateObjectColon, curr}
-            }
-            offset = tempInt + 1
-            continue
-        default:
-            if offset == size {
-                err = unexpected("value", offset, size, data)
-                return
-            }
-            switch data[offset] {
-            case '{':
-                curr.state = stateObjectKeyOrEnd
-                curr.value.value = map[string]*Value{}
-                offset++
-                continue
-            case '[':
-                curr.state = stateArrayValueOrEnd
-                curr.value.value = []*Value{}
-                offset++
-                continue
-            case '"':
-                curr.state = stateString
-                continue
-            case '0', '1', '2', '3', '4',
-                '5', '6', '7', '8', '9', '-':
-                tempDecimal = nil
-                tempExp = nil
-                tempInt4 = offset
-                if data[offset] == '-' {
-                    offset++
-                }
-            LOOP_NUM_INT:
-                for tempInt = offset; tempInt < size; tempInt++ {
-                    switch data[tempInt] {
-                    case '0', '1', '2', '3', '4', '5', '6', '7', '8', '9':
-                        continue
-                    default:
-                        break LOOP_NUM_INT
-                    }
-                }
-                tempInt2 = tempInt - offset
-                if tempInt2 == 0 {
-                    err = unexpected("[0-9]", offset, size, data)
-                    return
-                }
-                if data[offset] == '0' {
-                    if tempInt2 != 1 {
-                        offset++
-                        err = unexpected("[.eE]", offset, size, data)
-                        return
-                    }
-                }
-                offset = tempInt
-                if offset < size && data[offset] == '.' {
-                    offset++
-                LOOP_NUM_DEC:
-                    for tempInt = offset; tempInt < size; tempInt++ {
-                        switch data[tempInt] {
-                        case '0', '1', '2', '3', '4', '5', '6', '7', '8', '9':
-                            continue
-                        default:
-                            break LOOP_NUM_DEC
-                        }
-                    }
-                    if tempInt == offset {
-                        err = unexpected("[0-9]", offset, size, data)
-                        return
-                    }
-                    tempDecimal = data[offset:tempInt]
-                    offset = tempInt
-                }
-                if offset < size && (data[offset] == 'e' || data[offset] == 'E') {
-                    offset++
-                    if offset == size {
-                        err = unexpected("[0-9]", offset, size, data)
-                        return
-                    }
-                    if data[offset] == '-' || data[offset] == '+' {
-                        offset++
-                    }
-                
-                LOOP_NUM_EXP:
-                    for tempInt = offset; tempInt < size; tempInt++ {
-                        switch data[tempInt] {
-                        case '0', '1', '2', '3', '4', '5', '6', '7', '8', '9':
-                            continue
-                        default:
-                            break LOOP_NUM_EXP
-                        }
-                    }
-                    if tempInt == offset {
-                        err = unexpected("[0-9]", offset, size, data)
-                        return
-                    }
-                    tempExp = data[offset:tempInt]
-                    offset = tempInt
-                }
-                if tempDecimal == nil && tempExp == nil {
-                    curr.value.value, err = strconv.ParseInt(string(data[tempInt4:offset]), 10, 64)
-                } else {
-                    curr.value.value, err = strconv.ParseFloat(string(data[tempInt4:offset]), 64)
-                }
-                if err != nil {
-                    return
-                }
-                curr = curr.parent
-                continue
-            case 'n':
-                offset++
-                if size < offset+3 {
-                    expect := bytesNull[size-offset]
-                    err = unexpected(string(expect), size, size, data)
-                    return
-                }
-                if bytes.Equal(data[offset:offset+3], bytesNull) {
-                    offset += 3
-                    curr.value.value = NULL
-                    curr = curr.parent
-                    continue
-                }
-                err = unexpected("null", offset, size, data)
-                return
-            case 't':
-                offset++
-                if size < offset+3 {
-                    tempByte = bytesTrue[size-offset]
-                    err = unexpected(string(tempByte), size, size, data)
-                    return
-                }
-                if bytes.Equal(data[offset:offset+3], bytesTrue) {
-                    offset += 3
-                    curr.value.value = true
-                    curr = curr.parent
-                    continue
-                }
-                err = unexpected("true", offset, size, data)
-                return
-            case 'f':
-                offset++
-                if size < offset+4 {
-                    tempByte = bytesFalse[size-offset]
-                    err = unexpected(string(tempByte), size, size, data)
-                    return
-                }
-                if bytes.Equal(data[offset:offset+4], bytesFalse) {
-                    offset += 4
-                    curr.value.value = false
-                    curr = curr.parent
-                    continue
-                }
-                err = unexpected("false", offset, size, data)
-                return
-            default:
-                err = unexpected(valueStart, offset, size, data)
-                return
-            }
-        }
-    }
+	value = &Value{nil}
+	root := &state{value, stateNone, nil}
+	p := &parser{
+		data:   data,
+		size:   len(data),
+		offset: 0,
+		buf:    make([]byte, 0, 1024),
+		curr:   root,
+	}
+	err = p.parse()
+	return
+}
+
+func (p *parser) parseString() (string, error) {
+	var hexDigits [4]int
+	var pos int
+	var hexIdx int
+	var codePoint int
+
+	p.offset++
+	p.buf = p.buf[:0]
+LOOP_STRING:
+	for pos = p.offset; pos < p.size; pos++ {
+		switch p.data[pos] {
+		case '\\':
+			pos++
+			if pos == p.size {
+				return "", p.unexpectedAt("escaped char", pos)
+			}
+			switch p.data[pos] {
+			case 'U', 'u':
+				pos++
+				if p.size < pos+4 {
+					return "", p.unexpectedAt("[0-F]", p.size)
+				}
+				for hexIdx = 0; hexIdx < 4; hexIdx++ {
+					switch p.data[pos] {
+					case '0', '1', '2', '3', '4', '5', '6', '7', '8', '9':
+						hexDigits[hexIdx] = int(p.data[pos]) - 0x30
+					case 'a', 'b', 'c', 'd', 'e', 'f':
+						hexDigits[hexIdx] = int(p.data[pos]) - 0x57
+					case 'A', 'B', 'C', 'D', 'E', 'F':
+						hexDigits[hexIdx] = int(p.data[pos]) - 0x37
+					default:
+						return "", p.unexpectedAt("[0-F]", pos)
+					}
+					pos++
+				}
+				codePoint = (hexDigits[0] << 12) | (hexDigits[1] << 8) | (hexDigits[2] << 4) | (hexDigits[3])
+				if codePoint > 0xD7FF && codePoint < 0xDC00 {
+					if p.size < pos+6 {
+						if p.size == pos || p.data[pos] != '\\' {
+							return "", p.unexpectedAt("\\", p.size)
+						}
+						if p.size < pos+2 || (p.data[pos+1] != 'U' && p.data[pos+1] != 'u') {
+							return "", p.unexpectedAt("Uu", pos+1)
+						}
+						return "", p.unexpectedAt("[0-F]", p.size)
+					}
+					if p.data[pos] != '\\' {
+						return "", p.unexpectedAt("\\", pos)
+					}
+					pos++
+					if p.data[pos] != 'U' && p.data[pos] != 'u' {
+						return "", p.unexpectedAt("Uu", pos)
+					}
+					pos++
+					for hexIdx = 0; hexIdx < 4; hexIdx++ {
+						switch p.data[pos] {
+						case '0', '1', '2', '3', '4', '5', '6', '7', '8', '9':
+							hexDigits[hexIdx] = int(p.data[pos]) - 0x30
+						case 'a', 'b', 'c', 'd', 'e', 'f':
+							hexDigits[hexIdx] = int(p.data[pos]) - 0x57
+						case 'A', 'B', 'C', 'D', 'E', 'F':
+							hexDigits[hexIdx] = int(p.data[pos]) - 0x37
+						default:
+							return "", p.unexpectedAt("[0-F]", pos)
+						}
+						pos++
+					}
+					lowSurrogate := (hexDigits[0] << 12) | (hexDigits[1] << 8) | (hexDigits[2] << 4) | (hexDigits[3])
+					if lowSurrogate < 0xDC00 || lowSurrogate > 0xDFFF {
+						return "", p.unexpectedAt("[0xdc00 - 0xdfff]", pos-4)
+					}
+					codePoint = (((codePoint - 0xD800) << 10) | (lowSurrogate - 0xDC00)) + 0x10000
+				}
+				pos--
+				if codePoint < 0x0080 {
+					p.buf = append(p.buf, byte(codePoint))
+				} else if codePoint < 0x0800 {
+					p.buf = append(p.buf, 0xC0|byte(codePoint>>6), 0x80|byte(codePoint&0xBF))
+				} else if codePoint < 0x10000 {
+					p.buf = append(p.buf, 0xE0|byte(codePoint>>12), 0x80|byte((codePoint>>6)&0xBF), 0x80|byte(codePoint&0xBF))
+				} else {
+					p.buf = append(p.buf, 0xF0|byte(codePoint>>18), 0x80|byte((codePoint>>12)&0xBF), 0x80|byte((codePoint>>6)&0xBF), 0x80|byte(codePoint&0xBF))
+				}
+			case 't':
+				p.buf = append(p.buf, '\t')
+			case 'r':
+				p.buf = append(p.buf, '\r')
+			case 'n':
+				p.buf = append(p.buf, '\n')
+			case '"':
+				p.buf = append(p.buf, '"')
+			case '\\':
+				p.buf = append(p.buf, '\\')
+			case '/':
+				p.buf = append(p.buf, '/')
+			case 'b':
+				p.buf = append(p.buf, 0x08)
+			case 'f':
+				p.buf = append(p.buf, 0x0C)
+			default:
+				return "", p.unexpectedAt("escape sequence", pos)
+			}
+		case '"':
+			break LOOP_STRING
+		case 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15,
+			16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31:
+			return "", p.unexpectedAt("unicode", pos)
+		default:
+			p.buf = append(p.buf, p.data[pos])
+		}
+	}
+	if pos == p.size {
+		return "", p.unexpectedAt("\" to end string", pos)
+	}
+	p.offset = pos + 1
+	return string(p.buf), nil
+}
+
+func (p *parser) parseNumber() (interface{}, error) {
+	var pos int
+	var digitCount int
+	var numStart int
+	var decimalPart []byte
+	var exponentPart []byte
+
+	decimalPart = nil
+	exponentPart = nil
+	numStart = p.offset
+	if p.data[p.offset] == '-' {
+		p.offset++
+	}
+LOOP_NUM_INT:
+	for pos = p.offset; pos < p.size; pos++ {
+		switch p.data[pos] {
+		case '0', '1', '2', '3', '4', '5', '6', '7', '8', '9':
+			continue
+		default:
+			break LOOP_NUM_INT
+		}
+	}
+	digitCount = pos - p.offset
+	if digitCount == 0 {
+		return nil, p.unexpected("[0-9]")
+	}
+	if p.data[p.offset] == '0' {
+		if digitCount != 1 {
+			p.offset++
+			return nil, p.unexpected("[.eE]")
+		}
+	}
+	p.offset = pos
+	if p.offset < p.size && p.data[p.offset] == '.' {
+		p.offset++
+	LOOP_NUM_DEC:
+		for pos = p.offset; pos < p.size; pos++ {
+			switch p.data[pos] {
+			case '0', '1', '2', '3', '4', '5', '6', '7', '8', '9':
+				continue
+			default:
+				break LOOP_NUM_DEC
+			}
+		}
+		if pos == p.offset {
+			return nil, p.unexpected("[0-9]")
+		}
+		decimalPart = p.data[p.offset:pos]
+		p.offset = pos
+	}
+	if p.offset < p.size && (p.data[p.offset] == 'e' || p.data[p.offset] == 'E') {
+		p.offset++
+		if p.offset == p.size {
+			return nil, p.unexpected("[0-9]")
+		}
+		if p.data[p.offset] == '-' || p.data[p.offset] == '+' {
+			p.offset++
+		}
+
+	LOOP_NUM_EXP:
+		for pos = p.offset; pos < p.size; pos++ {
+			switch p.data[pos] {
+			case '0', '1', '2', '3', '4', '5', '6', '7', '8', '9':
+				continue
+			default:
+				break LOOP_NUM_EXP
+			}
+		}
+		if pos == p.offset {
+			return nil, p.unexpected("[0-9]")
+		}
+		exponentPart = p.data[p.offset:pos]
+		p.offset = pos
+	}
+	if decimalPart == nil && exponentPart == nil {
+		result, err := strconv.ParseInt(string(p.data[numStart:p.offset]), 10, 64)
+		return result, err
+	}
+	result, err := strconv.ParseFloat(string(p.data[numStart:p.offset]), 64)
+	return result, err
+}
+
+func (p *parser) parseLiteral(expected []byte, value interface{}) error {
+	expectedLen := len(expected)
+	if p.size < p.offset+expectedLen {
+		expectByte := expected[p.size-p.offset]
+		return p.unexpectedAt(string(expectByte), p.size)
+	}
+	if bytes.Equal(p.data[p.offset:p.offset+expectedLen], expected) {
+		p.offset += expectedLen
+		p.curr.value.value = value
+		p.curr = p.curr.parent
+		return nil
+	}
+	// Build the full literal name for error message
+	var name string
+	switch {
+	case &expected[0] == &bytesTrue[0]:
+		name = "true"
+	case &expected[0] == &bytesFalse[0]:
+		name = "false"
+	default:
+		name = "null"
+	}
+	return p.unexpected(name)
+}
+
+func (p *parser) parse() error {
+	for {
+	LOOP_WHITESPACE:
+		for ; p.offset < p.size; p.offset++ {
+			switch p.data[p.offset] {
+			case '\t', '\r', '\n', ' ':
+				continue
+			default:
+				break LOOP_WHITESPACE
+			}
+		}
+		if p.curr == nil {
+			if p.offset != p.size {
+				return p.unexpected("EOF")
+			}
+			return nil
+		}
+		switch p.curr.state {
+		case stateArrayValueOrEnd:
+			if p.offset == p.size {
+				return p.unexpected("value or ]")
+			}
+			switch p.data[p.offset] {
+			case ']':
+				p.curr = p.curr.parent
+				p.offset++
+			default:
+				p.curr.state = stateArrayEndOrComma
+				p.curr = &state{p.curr.value.AddElement(), stateNone, p.curr}
+			}
+			continue
+		case stateArrayEndOrComma:
+			if p.offset == p.size {
+				return p.unexpected(", or ]")
+			}
+			switch p.data[p.offset] {
+			case ']':
+				p.offset++
+				p.curr = p.curr.parent
+			case ',':
+				p.offset++
+				p.curr.state = stateArrayEndOrComma
+				p.curr = &state{p.curr.value.AddElement(), stateNone, p.curr}
+			default:
+				return p.unexpected(", or ]")
+			}
+			continue
+		case stateObjectColon:
+			if p.offset == p.size {
+				return p.unexpected(":")
+			}
+			p.offset++
+			p.curr.state = stateNone
+			continue
+		case stateObjectEndOrComma:
+			if p.offset == p.size {
+				return p.unexpected(", or }")
+			}
+			switch p.data[p.offset] {
+			case ',':
+				p.curr.state = stateObjectKey
+			case '}':
+				p.curr = p.curr.parent
+			default:
+				return p.unexpected(", or }")
+			}
+			p.offset++
+			continue
+		case stateObjectKeyOrEnd:
+			if p.offset == p.size {
+				return p.unexpected("\" or }")
+			}
+			if p.data[p.offset] == '}' {
+				p.offset++
+				p.curr = p.curr.parent
+				continue
+			}
+			fallthrough
+		case stateObjectKey:
+			if p.offset == p.size {
+				return p.unexpected("\"")
+			}
+			if p.data[p.offset] != '"' {
+				return p.unexpected("\"")
+			}
+			fallthrough
+		case stateString:
+			str, err := p.parseString()
+			if err != nil {
+				return err
+			}
+			if p.curr.state == stateString {
+				p.curr.value.value = str
+				p.curr = p.curr.parent
+			} else {
+				p.curr.state = stateObjectEndOrComma
+				p.curr = &state{p.curr.value.AddField(str), stateObjectColon, p.curr}
+			}
+			continue
+		default:
+			if p.offset == p.size {
+				return p.unexpected("value")
+			}
+			switch p.data[p.offset] {
+			case '{':
+				p.curr.state = stateObjectKeyOrEnd
+				p.curr.value.value = map[string]*Value{}
+				p.offset++
+				continue
+			case '[':
+				p.curr.state = stateArrayValueOrEnd
+				p.curr.value.value = []*Value{}
+				p.offset++
+				continue
+			case '"':
+				p.curr.state = stateString
+				continue
+			case '0', '1', '2', '3', '4',
+				'5', '6', '7', '8', '9', '-':
+				result, err := p.parseNumber()
+				if err != nil {
+					return err
+				}
+				p.curr.value.value = result
+				p.curr = p.curr.parent
+				continue
+			case 'n':
+				p.offset++
+				if err := p.parseLiteral(bytesNull, NULL); err != nil {
+					return err
+				}
+				continue
+			case 't':
+				p.offset++
+				if err := p.parseLiteral(bytesTrue, true); err != nil {
+					return err
+				}
+				continue
+			case 'f':
+				p.offset++
+				if err := p.parseLiteral(bytesFalse, false); err != nil {
+					return err
+				}
+				continue
+			default:
+				return p.unexpected(valueStart)
+			}
+		}
+	}
 }
