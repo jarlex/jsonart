@@ -95,7 +95,7 @@ func (m *marshaler) marshalFloat(f float64) error {
 	if math.IsInf(f, 0) {
 		return fmt.Errorf("cannot marshal infinite float value")
 	}
-	m.buf = strconv.AppendFloat(m.buf, f, 'f', -1, 64)
+	m.buf = strconv.AppendFloat(m.buf, f, 'g', -1, 64)
 	return nil
 }
 
