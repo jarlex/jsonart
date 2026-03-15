@@ -231,53 +231,117 @@ func (v *Value) Ensure(path ...string) *Value {
 	return temp
 }
 
+// ObjectSafe returns the underlying map for an object value, or an error if the value is not an object.
+func (v *Value) ObjectSafe() (map[string]*Value, error) {
+	if value, ok := v.value.(map[string]*Value); ok {
+		return value, nil
+	}
+	return nil, fmt.Errorf("not an object value, got %T", v.value)
+}
+
 // Object returns the underlying map for an object value.
 // Panics if the value is not an object.
 func (v *Value) Object() map[string]*Value {
-	if value, ok := v.value.(map[string]*Value); ok {
-		return value
+	value, err := v.ObjectSafe()
+	if err != nil {
+		panic(err.Error())
 	}
-	panic(fmt.Sprintf("not an object value, got %T", v.value))
+	return value
+}
+
+// ArraySafe returns the underlying slice for an array value, or an error if the value is not an array.
+func (v *Value) ArraySafe() ([]*Value, error) {
+	if value, ok := v.value.([]*Value); ok {
+		return value, nil
+	}
+	return nil, fmt.Errorf("not an array value, got %T", v.value)
 }
 
 // Array returns the underlying slice for an array value.
 // Panics if the value is not an array.
 func (v *Value) Array() []*Value {
-	if value, ok := v.value.([]*Value); ok {
-		return value
+	value, err := v.ArraySafe()
+	if err != nil {
+		panic(err.Error())
 	}
-	panic(fmt.Sprintf("not an array value, got %T", v.value))
+	return value
+}
+
+// IntSafe returns the underlying int64, or an error if the value is not an integer.
+func (v *Value) IntSafe() (int64, error) {
+	if value, ok := v.value.(int64); ok {
+		return value, nil
+	}
+	return 0, fmt.Errorf("not an int value, got %T", v.value)
 }
 
 // Int returns the underlying int64 for an integer value.
 // Panics if the value is not an integer.
 func (v *Value) Int() int64 {
-	if value, ok := v.value.(int64); ok {
-		return value
+	value, err := v.IntSafe()
+	if err != nil {
+		panic(err.Error())
 	}
-	panic(fmt.Sprintf("not an int value, got %T", v.value))
+	return value
+}
+
+// FloatSafe returns the underlying float64, or an error if the value is not a number.
+// If the value is an int64, it is converted to float64.
+func (v *Value) FloatSafe() (float64, error) {
+	if value, ok := v.value.(int64); ok {
+		return float64(value), nil
+	}
+	if value, ok := v.value.(float64); ok {
+		return value, nil
+	}
+	return 0, fmt.Errorf("not a number value, got %T", v.value)
 }
 
 // Float returns the underlying float64 for a number value.
 // If the value is an int64, it is converted to float64.
 // Panics if the value is not a number.
 func (v *Value) Float() float64 {
-	if value, ok := v.value.(int64); ok {
-		return float64(value)
+	value, err := v.FloatSafe()
+	if err != nil {
+		panic(err.Error())
 	}
-	if value, ok := v.value.(float64); ok {
-		return float64(value)
+	return value
+}
+
+// StringSafe returns the underlying string, or an error if the value is not a string.
+func (v *Value) StringSafe() (string, error) {
+	if value, ok := v.value.(string); ok {
+		return value, nil
 	}
-	panic(fmt.Sprintf("not a number value, got %T", v.value))
+	return "", fmt.Errorf("not a string value, got %T", v.value)
 }
 
 // String returns the underlying string for a string value.
 // Panics if the value is not a string.
 func (v *Value) String() string {
-	if value, ok := v.value.(string); ok {
-		return value
+	value, err := v.StringSafe()
+	if err != nil {
+		panic(err.Error())
 	}
-	panic(fmt.Sprintf("not a string value, got %T", v.value))
+	return value
+}
+
+// BoolSafe returns the underlying bool, or an error if the value is not a boolean.
+func (v *Value) BoolSafe() (bool, error) {
+	if value, ok := v.value.(bool); ok {
+		return value, nil
+	}
+	return false, fmt.Errorf("not a bool value, got %T", v.value)
+}
+
+// Bool returns the underlying bool for a boolean value.
+// Panics if the value is not a boolean.
+func (v *Value) Bool() bool {
+	value, err := v.BoolSafe()
+	if err != nil {
+		panic(err.Error())
+	}
+	return value
 }
 
 // Value returns the underlying Go value as an interface{}.

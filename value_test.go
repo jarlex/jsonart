@@ -137,3 +137,196 @@ func TestValueInterface(t *testing.T) {
 		t.Errorf("Value() for null: expected nil, got %v", val)
 	}
 }
+
+func TestSafeMethodsSuccess(t *testing.T) {
+	t.Run("StringSafe on string", func(t *testing.T) {
+		v := NewValue()
+		v.AsString("hello")
+		got, err := v.StringSafe()
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if got != "hello" {
+			t.Errorf("expected \"hello\", got %q", got)
+		}
+	})
+
+	t.Run("IntSafe on int", func(t *testing.T) {
+		v := NewValue()
+		v.AsInt(42)
+		got, err := v.IntSafe()
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if got != 42 {
+			t.Errorf("expected 42, got %d", got)
+		}
+	})
+
+	t.Run("FloatSafe on float", func(t *testing.T) {
+		v := NewValue()
+		v.AsFloat(3.14)
+		got, err := v.FloatSafe()
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if got != 3.14 {
+			t.Errorf("expected 3.14, got %f", got)
+		}
+	})
+
+	t.Run("FloatSafe on int (coercion)", func(t *testing.T) {
+		v := NewValue()
+		v.AsInt(42)
+		got, err := v.FloatSafe()
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if got != 42.0 {
+			t.Errorf("expected 42.0, got %f", got)
+		}
+	})
+
+	t.Run("ObjectSafe on object", func(t *testing.T) {
+		v := NewValue()
+		v.AsObject(map[string]*Value{"a": NewValue()})
+		got, err := v.ObjectSafe()
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(got) != 1 {
+			t.Errorf("expected map length 1, got %d", len(got))
+		}
+		if _, ok := got["a"]; !ok {
+			t.Errorf("expected key \"a\" in map")
+		}
+	})
+
+	t.Run("ArraySafe on array", func(t *testing.T) {
+		v := NewValue()
+		v.AsArray([]*Value{NewValue()})
+		got, err := v.ArraySafe()
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(got) != 1 {
+			t.Errorf("expected slice length 1, got %d", len(got))
+		}
+	})
+
+	t.Run("BoolSafe on true", func(t *testing.T) {
+		v := NewValue()
+		v.AsBool(true)
+		got, err := v.BoolSafe()
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if got != true {
+			t.Errorf("expected true, got %v", got)
+		}
+	})
+
+	t.Run("BoolSafe on false", func(t *testing.T) {
+		v := NewValue()
+		v.AsBool(false)
+		got, err := v.BoolSafe()
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if got != false {
+			t.Errorf("expected false, got %v", got)
+		}
+	})
+}
+
+func TestSafeMethodsError(t *testing.T) {
+	t.Run("StringSafe on int", func(t *testing.T) {
+		v := NewValue()
+		v.AsInt(42)
+		got, err := v.StringSafe()
+		if err == nil {
+			t.Fatal("expected error, got nil")
+		}
+		if got != "" {
+			t.Errorf("expected zero value \"\", got %q", got)
+		}
+		if msg := err.Error(); msg != "not a string value, got int64" {
+			t.Errorf("unexpected error message: %s", msg)
+		}
+	})
+
+	t.Run("IntSafe on float", func(t *testing.T) {
+		v := NewValue()
+		v.AsFloat(3.14)
+		got, err := v.IntSafe()
+		if err == nil {
+			t.Fatal("expected error, got nil")
+		}
+		if got != 0 {
+			t.Errorf("expected zero value 0, got %d", got)
+		}
+		if msg := err.Error(); msg != "not an int value, got float64" {
+			t.Errorf("unexpected error message: %s", msg)
+		}
+	})
+
+	t.Run("FloatSafe on string", func(t *testing.T) {
+		v := NewValue()
+		v.AsString("hello")
+		got, err := v.FloatSafe()
+		if err == nil {
+			t.Fatal("expected error, got nil")
+		}
+		if got != 0 {
+			t.Errorf("expected zero value 0, got %f", got)
+		}
+		if msg := err.Error(); msg != "not a number value, got string" {
+			t.Errorf("unexpected error message: %s", msg)
+		}
+	})
+
+	t.Run("ObjectSafe on array", func(t *testing.T) {
+		v := NewValue()
+		v.AsArray([]*Value{NewValue()})
+		got, err := v.ObjectSafe()
+		if err == nil {
+			t.Fatal("expected error, got nil")
+		}
+		if got != nil {
+			t.Errorf("expected nil map, got %v", got)
+		}
+	})
+
+	t.Run("ArraySafe on object", func(t *testing.T) {
+		v := NewValue()
+		v.AsObject(map[string]*Value{"a": NewValue()})
+		got, err := v.ArraySafe()
+		if err == nil {
+			t.Fatal("expected error, got nil")
+		}
+		if got != nil {
+			t.Errorf("expected nil slice, got %v", got)
+		}
+	})
+
+	t.Run("BoolSafe on string", func(t *testing.T) {
+		v := NewValue()
+		v.AsString("true")
+		got, err := v.BoolSafe()
+		if err == nil {
+			t.Fatal("expected error, got nil")
+		}
+		if got != false {
+			t.Errorf("expected zero value false, got %v", got)
+		}
+		if msg := err.Error(); msg != "not a bool value, got string" {
+			t.Errorf("unexpected error message: %s", msg)
+		}
+	})
+}
+
+func TestBoolPanic(t *testing.T) {
+	v := NewValue()
+	v.AsString("x")
+	assertPanic(t, "Bool() as string", func() { v.Bool() })
+}
